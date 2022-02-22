@@ -1,0 +1,140 @@
+---
+title: "Data Exploration Project"
+author: "Tinh-An Le"
+date: "2/18/2022"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Exploration Project
+In this data exploration project, I am conducting exploratory data analysis including regression and graphical representation to answer the research question below:  
+
+Among colleges that predominantly grand bachelor's degrees, did the release of the Scorecard shift student interest to high-earning colleges relative to low-earning ones (as proxied by Google searches for keywords associated with those colleges)?
+
+## Data Preparation
+Uploading the Data and Loading Libraries:
+```{r, warning = FALSE, results = FALSE, message = FALSE}
+# Load libraries
+library(tidyverse)
+library(lubridate)
+library(jtools)
+library(dplyr)
+
+# Load data
+scorecard <- read.csv(file = "Most+Recent+Cohorts+(Scorecard+Elements).csv")
+id <- read.csv(file = "id_name_link.csv")
+trends_Yorktown <- read.csv(file = "trends_up_to_Yorktowne.csv")
+trends_UTMB <- read.csv(file = "trends_up_to_UTMB.csv")
+trends_UT <- read.csv(file = "trends_up_to_UT.csv")
+trends_UPhoenix <- read.csv(file = "trends_up_to_UPhoenix.csv")
+trends_UM <- read.csv(file = "trends_up_to_UM.csv")
+trends_inter_6 <- read.csv(file = "trends_up_to_inter_6.csv")
+trends_inter_5 <- read.csv(file = "trends_up_to_inter_5.csv")
+trends_inter_4 <- read.csv(file = "trends_up_to_inter_4.csv")
+trends_inter_3 <- read.csv(file = "trends_up_to_inter_3.csv")
+trends_inter_2 <- read.csv(file = "trends_up_to_inter_2.csv")
+trends_inter_1 <- read.csv(file = "trends_up_to_inter_1.csv")
+trends_finish <- read.csv(file = "trends_up_to_finish.csv")
+```
+
+Joining our Google Trends index data set with our College Scorecard data set using the ID Name data to link the two:
+```{r, warning = FALSE, results = FALSE, message = FALSE}
+# Combining all Google Trends data sets
+trends <- list.files(pattern = "trends_up_to_", full.names = TRUE) %>%
+  lapply(read_csv) %>%
+  bind_rows
+
+# Standardizing Google Trends Data
+trends <- trends %>%
+  group_by(schname, keyword) %>%
+  mutate(index_std = (index - mean(index,na.rm = TRUE))/sd(index, na.rm = TRUE))
+
+# Drop all universities that share an exact name with another university
+id <- id %>%
+  group_by(schname) %>%
+  mutate(n = n()) %>%
+  filter(n == 1)
+
+# Rename UNITID and OPEID column names for data data frame
+scorecard <- rename(scorecard, unitid = UNITID)
+scorecard <- rename(scorecard, opeid = OPEID)
+
+# Combining Data Sets
+joined <- inner_join(id, trends)
+joined2 <- inner_join(joined, scorecard)
+
+```
+
+Taking into consideration that our research question is asking specifically about colleges that grant bachelor's degrees and is looking to see the effect of the release of the College Scorecard on student interest, I cleaned the data as follows:
+```{r}
+# Select only colleges that predominantly grant bachelor's degrees
+data <- filter(joined2, PREDDEG == 3)
+
+# Select only necessary columns
+df <- select(data, unitid, opeid, schname, keyword, monthorweek, index, index_std, md_earn_wne_p10.REPORTED.EARNINGS)
+
+# Grouping the Google Trends Data by month and college
+new_df<- df %>%
+  mutate(date = ymd(str_sub(monthorweek, 1, 10))) %>%
+  group_by(month = floor_date(date, "month"), unitid, opeid, schname, keyword, index, index_std, md_earn_wne_p10.REPORTED.EARNINGS) %>%
+  summarize(index_std = mean(index_std, na.rm = TRUE))
+
+# Dropping all rows with missing data
+completeDF <- na.omit(new_df)
+
+write.csv(new_df, "cleaned_data.csv")
+```
+
+
+## Analysis
+Once cleaning the data, I moved on to conducting the regression analysis:
+
+Preparation:
+```{r, warning = FALSE, message = FALSE}
+# Read in cleaned data
+final_data <- read.csv("cleaned_data.csv")
+
+# Finding median of earnings of graduates ten years after graduation of colleges.
+final_data <- transform(final_data, md_earn_wne_p10.REPORTED.EARNINGS = as.numeric(md_earn_wne_p10.REPORTED.EARNINGS))
+median(final_data$md_earn_wne_p10.REPORTED.EARNINGS, na.rm = TRUE)
+
+# Create a dummy variable for high and low earning 
+final_data <- final_data %>% mutate(high_earning = md_earn_wne_p10.REPORTED.EARNINGS >= 41800)
+
+# Create a dummy variable for before and after ScoreBoard was released
+final_data <- final_data %>% mutate(after = month >= ymd('2015-9-01'))
+
+# Removing any missing data
+final_data <-na.omit(final_data)
+```
+For my regression equation, I needed to decide how I would define "high-earning" and "low-earning" colleges. After calculating the median of the median earnings of graduates ten years after graduation for all colleges in the data set total, I determined anything higher than that median, which is $41,800, to be "high-earning" and anything lower to be "low-earning". I utilized median instead of mean for this measure because income and earnings is a variable that is often skewed.
+
+
+__Regression:__
+```{r}
+reg <- lm(index_std ~ after * high_earning, data = final_data)
+export_summs(reg, robust = TRUE, digits = 3)
+```
+__Regression Model Design:__
+
+When deciding my regression model, I decided to use to regress the standardized index with the interaction between the logical dummy variables __after__, which would be the "treatment" of releasing of the College Scorecard in early September 2015 and __high_earning__, which indicates the difference between high and low earning colleges. I chose to utilize standardized index as well instead of just the raw index data so that the results would be more meaningful in comparison since the data was relative to begin with. 
+
+I wanted to use a regression design similar to a Difference-In-Differences model to hone in on whether the release of the Scorecard made a difference in interest between high earning and low earning colleges. 
+
+__Regression Results Analysis:__
+
+According to the regression results, we can see that after the release of the College Scorecard, the "high-earning" colleges are expected to get more student interest at a rate of -7.7 percentage points less than "low-earning" colleges based on standardized index proxied by Google keyword searches. There is not evidence that the release increased student interest to "high-earning" colleges. 
+
+## Graphical Representation
+```{r, message = FALSE}
+graph_df <- final_data %>%
+  group_by(month, high_earning) %>%
+  summarize(what = mean(index_std))
+
+ggplot(graph_df, aes(as.Date(month), what, color = high_earning, group = high_earning)) + geom_line() + labs(title = "Average Standardized Index by Month for High Earning vs Low Earning Colleges", x = "Date", y = "Standardized Index") + geom_vline(aes(xintercept = as.Date("2015-09-01"))) + theme_classic()
+
+```
+From this graph, we can see that the trends for high and low earning colleges was indeed pretty parallel before the introduction of the "treatment", which was the release of the Scorecard, indicated by the vertical black line on the chart. 
+Based on the graphical representation above, we can see that the searches was indeed lower for high-earning colleges than the index for low-earning colleges at the point of introduction, and we can see that the trend does follow what we found in the regression result which is that the release of the college scorecard did not have significant impact on the increase to searches for high-earnings colleges. 
